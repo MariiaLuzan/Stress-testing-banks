@@ -83,9 +83,91 @@ def load_call_reports(call_reports_folder, files_dic):
     # Specify the order of the columns
     df_call_reports = df_call_reports.reindex(columns=(['Report Date'] + list([col for col in df_call_reports.columns if col!='Report Date'])))
     
-    df_call_reports['Report Date'] = pd.to_datetime(df_call_reports['Report Date'], format='%m%d%Y')
+    df_call_reports['Report Date'] = pd.to_datetime(df_call_reports['Report Date'], format='%m%d%Y').dt.date
     df_call_reports.sort_values(by=['Report Date', 'IDRSSD'], inplace=True)
     
     df_call_reports.reset_index(drop=True, inplace=True)
     
     return df_call_reports
+
+
+
+
+
+def load_risk_reports(risk_reports_folder, files_dic):
+    """
+    Loads panel bank data from UBPR reports stored in zipped folders into a dataframe.
+    
+    The UBPR reports should be retrieved from the URL: https://cdr.ffiec.gov/public/PWS/DownloadBulkData.aspx 
+    by selecting the "UBPR Ratio -- Four Periods" option and specifying the desired Reporting Period End Date
+    
+    Each zipped folder contains UBPR reports for a specific report date.
+    This function reads files from the zipped folders and compiles them into a single dataframe.
+
+    Args:
+    UBPR_reports_folder (str): Path to the folder containing zipped folders with UBPR reports.
+    files_dic (dict): Dictionary specifying the desired reports to load and the columns to extract from them.
+
+    Returns:
+    df_risk_reports (pd.DataFrame): A dataframe containing the concatenated data from the specified UBPR reports.
+    
+    """
+    
+    # Define a dataframe that will contain concatenated data
+    df_risk_reports = None
+
+    # Iterate through each zipped folder in the UBPR_reports_folder
+    for zip_file in glob.iglob(risk_reports_folder+'/*'):
+        
+        # Take the report year (from the name of a zipped folder)
+        report_year = zip_file[-8:-4]
+        
+        # List of reports in the zipped folder
+        risk_reports = ZipFile(zip_file).namelist()
+    
+        # Define a dataframe to hold data for a single report date
+        df_report_date = None
+    
+        # Find risk reports that we need to load
+        for files_dic_key in files_dic.keys():
+            
+            for risk_report in risk_reports:
+                risk_report_name_load = files_dic_key + " " + report_year + ".txt"
+                if risk_report_name_load==risk_report:
+                    df = pd.read_csv(ZipFile(zip_file).open(risk_report), sep='\t', 
+                                     low_memory=False, header=0, 
+                                     skiprows=[1])
+                
+                    # Financial metric codes can change over time; for instance, in the earlier periods, 
+                    # the provision for loan losses had the code 'RIAD4230,' later changing to 'RIADJJ33'.
+                    # Consequently, various report dates may have varying columns for certain financial metrics. 
+                    # We should only load columns that currently exist in the dataframe.
+                    set_df = set(df.columns)
+                    set_dic = set(files_dic[files_dic_key].keys())
+                    columns = list(set.intersection(set_dic, set_df))
+                               
+                    df = df[columns]
+                
+                    if type(df_report_date)==pd.core.frame.DataFrame:
+                        df_report_date = df_report_date.merge(df, on=["ID RSSD", "Reporting Period"])
+                    else:
+                        df_report_date = df.copy()
+                
+                    break
+    
+        # Concatenate dataframes for different report dates    
+        if type(df_risk_reports)==pd.core.frame.DataFrame:
+            df_risk_reports = pd.concat([df_risk_reports, df_report_date])
+        else:
+            df_risk_reports = df_report_date.copy() 
+            
+    # Specify the order of the columns
+    df_risk_reports = df_risk_reports.reindex(columns=(["Reporting Period", "ID RSSD"] + \
+        list([col for col in df_risk_reports.columns if col not in ["Reporting Period", "ID RSSD"]])))
+    
+    df_risk_reports.rename(columns={"Reporting Period": "Report Date", "ID RSSD": "IDRSSD"}, inplace=True)
+    df_risk_reports["Report Date"] = pd.to_datetime(df_risk_reports["Report Date"]).dt.date
+    
+    df_risk_reports.reset_index(drop=True, inplace=True)
+    
+    return df_risk_reports
